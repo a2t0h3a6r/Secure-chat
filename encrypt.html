@@ -1,0 +1,77 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Local AES-GCM Text Encryptor (client-only)</title>
+</head>
+<body style="font-family:system-ui;padding:18px;max-width:800px">
+  <h2>Local AES-GCM Text Encryptor</h2>
+  <p>Open this file locally (file://). It derives a key from a password (PBKDF2) and uses AES-GCM.</p>
+
+  <textarea id="input" rows="8" style="width:100%" placeholder="Type plaintext here..."></textarea>
+  <input id="password" type="password" placeholder="Password / passphrase" style="width:100%;margin-top:8px"/>
+  <div style="margin-top:8px">
+    <button id="enc">Encrypt → Base64</button>
+    <button id="dec">Decrypt (Input base64)</button>
+    <button id="rand">Generate random password</button>
+  </div>
+  <p><small>Output:</small></p>
+  <textarea id="output" rows="6" style="width:100%"></textarea>
+
+<script>
+const enc = new TextEncoder(), dec = new TextDecoder();
+
+async function deriveKey(password, salt, iterations=200000) {
+  const pwBytes = enc.encode(password);
+  const baseKey = await crypto.subtle.importKey("raw", pwBytes, "PBKDF2", false, ["deriveKey"]);
+  return crypto.subtle.deriveKey(
+    {name:"PBKDF2",salt,iterations,hash:"SHA-256"},
+    baseKey,
+    {name:"AES-GCM", length: 256},
+    false,
+    ["encrypt","decrypt"]
+  );
+}
+
+function toB64(buf){ return btoa(String.fromCharCode(...new Uint8Array(buf))); }
+function fromB64(s){ return Uint8Array.from(atob(s), c=>c.charCodeAt(0)); }
+
+document.getElementById('enc').onclick = async () => {
+  try {
+    const plaintext = document.getElementById('input').value;
+    const password = document.getElementById('password').value;
+    if(!password) return alert('Enter password');
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const iv = crypto.getRandomValues(new Uint8Array(12)); // 96-bit iv recommended for GCM
+    const key = await deriveKey(password, salt);
+    const cipher = await crypto.subtle.encrypt({name:"AES-GCM", iv}, key, enc.encode(plaintext));
+    // Package: salt || iv || ciphertext (all raw bytes), base64 encode for sharing
+    const out = new Uint8Array(salt.byteLength + iv.byteLength + cipher.byteLength);
+    out.set(salt, 0); out.set(iv, salt.byteLength); out.set(new Uint8Array(cipher), salt.byteLength + iv.byteLength);
+    document.getElementById('output').value = toB64(out.buffer);
+  } catch(e){ alert('Encryption failed: '+e); }
+};
+
+document.getElementById('dec').onclick = async () => {
+  try {
+    const b64 = document.getElementById('input').value.trim();
+    const password = document.getElementById('password').value;
+    if(!b64 || !password) return alert('Provide base64 input in textbox and password');
+    const data = fromB64(b64);
+    const salt = data.slice(0,16);
+    const iv = data.slice(16,28);
+    const cipher = data.slice(28);
+    const key = await deriveKey(password, salt);
+    const plainBuf = await crypto.subtle.decrypt({name:"AES-GCM", iv}, key, cipher);
+    document.getElementById('output').value = dec.decode(plainBuf);
+  } catch(e){ alert('Decryption failed (wrong password or corrupted data)'); }
+};
+
+document.getElementById('rand').onclick = () => {
+  // generate a strong random passphrase (base64)
+  const r = crypto.getRandomValues(new Uint8Array(16));
+  document.getElementById('password').value = btoa(String.fromCharCode(...r));
+};
+</script>
+</body>
+</html>
